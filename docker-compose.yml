@@ -1,0 +1,38 @@
+services:
+  router:
+    build:
+      context: ./router
+      dockerfile: Dockerfile
+    ports:
+      - "${ROUTER_PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+      - CONTEXT_SESSIONS_DIR=/data/sessions
+    volumes:
+      - router-sessions:/data/sessions
+    depends_on:
+      - ollama
+    networks:
+      - router-net
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_API_KEY=${OLLAMA_API_KEY}
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    volumes:
+      - ./models:/root/.ollama
+    command: serve
+    networks:
+      - router-net
+
+volumes:
+  router-sessions:
+
+networks:
+  router-net:
+    driver: bridge
