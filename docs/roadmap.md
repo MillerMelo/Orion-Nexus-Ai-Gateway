@@ -26,7 +26,7 @@ El paralelo conceptual es Docker: así como Docker estandarizó contenedores, OR
 
 ---
 
-## Estado actual — Fase 0: AI Router (✅ Implementado)
+## Estado actual — Fase 0: AI Router base (✅ Implementado)
 
 El AI Router es la base de ORION. Ya funciona:
 
@@ -56,6 +56,82 @@ Capacidades activas:
 - Comandos de chat: `/session`, `/costs`, `/simulate`
 - Integración transparente con OpenCode y Claude Code
 - Detección de hardware y recomendación/migración de modelo local (`make check-hw`, `make optimize-model`)
+
+---
+
+## Fase 0.5 — Multi-provider + Quota Tracker (✅ Implementado)
+
+**Objetivo:** Aprovechar los free tiers de proveedores frontier para reducir costos y habilitar arena mode.
+
+```
+OpenCode / Claude Code
+         │
+         ▼
+    AI Router (Express, puerto 3000)
+         │
+    ┌────┴──────────────────────────────────────┐
+    │  clasificación con matriz de capacidades  │
+    │  + quota tracker proactivo (por día)      │
+    └────┬──────────────────────────────────────┘
+         │
+    ┌────┼────────┬────────┐
+    │    │        │        │
+ Ollama Groq  Gemini   Claude / OpenAI
+ local  free   free    (pagado, fallback final)
+```
+
+### Proveedores free-tier integrados
+
+| Proveedor | Modelo default | Límite free | Fortaleza |
+|-----------|---------------|-------------|-----------|
+| Groq | `llama3-8b-8192` | ~500K tokens/día | Velocidad — inferencia más rápida del mercado |
+| Gemini | `gemini-1.5-flash` | ~1.5M tokens/día | Contexto largo (1M tokens), multilingüe |
+
+### Matriz de capacidades (classifier)
+
+| Señal en el prompt | Proveedor asignado | Razón |
+|---|---|---|
+| `urgent`, `emergencia`, `prioridad` | Claude (pagado) | Alta criticidad, siempre disponible |
+| `legal`, `contrato`, `cumplimiento` | Gemini free | Razonamiento sobre documentos |
+| Bloque de código (` ``` `) | Claude (pagado) | Mejor en code reasoning multi-archivo |
+| Ruta de archivo (`/src/...`) | Claude (pagado) | File-system-aware tool use |
+| Tool result / tool call | Claude (pagado) | Formato nativo de herramientas |
+| `translate`, `traduc` | Gemini free | Cobertura multilingüe |
+| `summarize`, `resumen` | Groq Llama3 70B | Rápido en tareas de compresión |
+| Pregunta simple (`?`) | Groq Llama3 8B | Máxima velocidad, costo $0.00 |
+| < 800 tokens sin señal | Ollama local | $0.00, procesado en tu PC |
+| ≥ 800 tokens sin señal | Claude (default) | Fallback remoto estándar |
+
+### Quota tracker proactivo
+
+- Monitorea uso diario por proveedor en `./data/quota.json`
+- No espera el 429 — excluye proveedores que superen el 100% de su límite configurado
+- Rollover automático a medianoche UTC
+- Si un proveedor se agota, el clasificador pasa al siguiente en la cadena
+
+### Fallback chain extendida
+
+```
+Provider primario → falla / quota agotada
+  → Groq (si no es el primario)
+  → Gemini (si no es el primario)
+  → OpenAI (fallback comercial)
+```
+
+### Endpoint de monitoreo
+
+```
+GET /router/quota   → cuota diaria por proveedor (usada / límite / restante)
+```
+
+### Archivos implementados
+
+- `router/src/quota-tracker.js` — tracker con rollover diario y persistencia
+- `router/src/providers/gemini.js` — integración vía OpenAI-compat endpoint
+- `router/src/providers/groq.js` — integración OpenAI-compatible
+- `router/src/classifier.js` — matriz de capacidades + quota-awareness
+- `router/src/routing.js` — cache invalida entradas de proveedores con quota agotada
+- `router/src/proxy.js` — fallback chain multi-hop + `recordUsage()` post-respuesta
 
 ---
 
@@ -118,6 +194,52 @@ Un mismo comando funciona para humanos (CLI), servicios (API REST) y modelos (MC
 **Archivos clave a crear:**
 - `router/src/commandRegistry.js` — registry + auto-discovery de plugins
 - `router/src/mcp.js` — servidor MCP que expone el registry
+
+### 1.4 Arena Mode (multi-provider fan-out)
+
+Enviar el mismo prompt a múltiples proveedores en paralelo y comparar respuestas. Diseñado para aprovechar los free tiers integrados en Fase 0.5:
+
+```
+prompt ──────────────────────────────────┐
+         │              │                │
+         ▼              ▼                ▼
+   Groq (free)    Gemini (free)    Claude (pagado)
+         │              │                │
+         └──────────────┴────────────────┘
+                        │
+              respuestas en panel comparativo
+                        │
+              usuario elige — o ORION elige
+              la de mayor score de coherencia
+```
+
+**Activación:** prompt con prefijo `/arena` o header `x-orion-arena: true`.
+
+**Resultado:** las N respuestas quedan guardadas en la sesión; el usuario puede continuar cualquier hilo.
+
+**Archivos clave a crear:**
+- `router/src/arena.js` — fan-out paralelo + agregación de respuestas
+- Comando de chat `/arena <prompt>` registrado en el Command Registry
+
+### 1.5 Provider scoring multi-criterio
+
+Extensión del clasificador con ponderación dinámica de proveedores:
+
+```
+score = capability_weight × 0.5
+      + quota_remaining   × 0.3
+      + latency_history   × 0.2
+```
+
+- **capability_weight** — matriz estática de fortalezas por tipo de tarea (seed en Fase 0.5)
+- **quota_remaining** — porcentaje de cuota diaria disponible (del quota-tracker)
+- **latency_history** — promedio de latencia de las últimas N llamadas por proveedor
+
+El proveedor con mayor score gana. Evoluciona la lógica de Fase 0.5 de reglas fijas a scoring continuo.
+
+**Archivos clave a crear:**
+- `router/src/scorer.js` — cálculo de score + histórico de latencias
+- `router/src/latency-tracker.js` — registro de latencia por proveedor (en memoria, persiste cada N requests)
 
 ---
 
@@ -425,10 +547,11 @@ Developer / OpenCode / Claude Code / CI-CD
 | Fase | Versión | Componentes | Estado |
 |------|---------|-------------|--------|
 | 0 — AI Router base | v0.1 | Pipeline completo, sesiones, costos, OpenCode | ✅ Implementado |
-| 1 — Command Registry + MCP | v0.2 | Registry extensible, plugins npm, MCP server | ⬜ Pendiente |
+| 0.5 — Multi-provider + Quota | v0.5 | Groq, Gemini free tiers, quota tracker, matriz de capacidades | ✅ Implementado |
+| 1 — Command Registry + MCP + Arena | v0.2 | Registry extensible, plugins npm, MCP server, arena mode, provider scoring | ⬜ Pendiente |
 | 2 — oriond + NEXUS + Agentes | v0.3 | Daemon, multi-agent pipeline, Orionfile | ⬜ Pendiente |
 | 3 — Context Graph + Auto Dev | v0.4 | Grafo semántico, GitHub issue → PR | ⬜ Pendiente |
-| 4 — Registry + Industrial | v0.5 | Agent Hub, ORION-Industrial (PLC/SCADA/IoT) | ⬜ Pendiente |
+| 4 — Registry + Industrial | v1.0 | Agent Hub, ORION-Industrial (PLC/SCADA/IoT) | ⬜ Pendiente |
 
 ---
 

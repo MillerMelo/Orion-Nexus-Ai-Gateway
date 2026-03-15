@@ -11,8 +11,11 @@ const MODEL_PRICING = {
   'gpt-4o':                       { input:  2.50, output: 10.00 },
   'gpt-4o-mini':                  { input:  0.15, output:  0.60 },
   'gpt-4-turbo':                  { input: 10.00, output: 30.00 },
-  'gemini-1.5-pro':               { input:  1.25, output:  5.00 },
-  'gemini-1.5-flash':             { input:  0.075, output: 0.30 },
+  'gemini-1.5-pro':               { input:  1.25,  output:  5.00 },
+  'gemini-1.5-flash':             { input:  0.075, output:  0.30 },
+  'gemini-2.0-flash':             { input:  0.10,  output:  0.40 },
+  'llama3-8b-8192':               { input:  0.05,  output:  0.08 },  // Groq
+  'llama3-70b-8192':              { input:  0.59,  output:  0.79 },  // Groq
 };
 
 // Map each configured provider to its cheapest available model
@@ -20,6 +23,7 @@ const PROVIDER_CHEAPEST = {
   claude: 'claude-3-haiku',
   openai: 'gpt-4o-mini',
   gemini: 'gemini-1.5-flash',
+  groq:   'llama3-8b-8192',
 };
 
 const DEFAULT_PRICING = { input: 3.00, output: 15.00 };
@@ -48,6 +52,7 @@ export function cheapestConfiguredModel() {
   if (config.claudeApiKey) candidates.push(PROVIDER_CHEAPEST.claude);
   if (config.openaiApiKey) candidates.push(PROVIDER_CHEAPEST.openai);
   if (config.geminiApiKey) candidates.push(PROVIDER_CHEAPEST.gemini);
+  if (config.groqApiKey)   candidates.push(PROVIDER_CHEAPEST.groq);
 
   if (!candidates.length) return { model: 'gpt-4o-mini', pricing: MODEL_PRICING['gpt-4o-mini'] };
 

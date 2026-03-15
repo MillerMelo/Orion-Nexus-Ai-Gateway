@@ -11,6 +11,7 @@ import { contextMiddleware, contextRouteHandler, contextListHandler, contextDele
 import { summaryMiddleware } from './summary.js';
 import { proxyMiddleware } from './proxy.js';
 import { getAllCosts, getSessionCosts, clearSessionCosts, recordLocalCost } from './costs.js';
+import { loadQuota, getQuotaSnapshot } from './quota-tracker.js';
 
 function checkpoint(phase) {
   return (req, res, next) => {
@@ -136,6 +137,10 @@ app.delete('/router/costs', (_req, res) => {
   res.json({ cleared: 'all' });
 });
 
-app.listen(config.routerPort, () => {
-  console.log(`router service listening on ${config.routerPort}`);
+app.get('/router/quota', (_req, res) => res.json(getQuotaSnapshot()));
+
+loadQuota().then(() => {
+  app.listen(config.routerPort, () => {
+    console.log(`router service listening on ${config.routerPort}`);
+  });
 });
