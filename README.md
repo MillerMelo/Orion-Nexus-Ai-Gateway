@@ -2,9 +2,9 @@
 
 > **Orchestration · Routing · Intelligence · Optimization · Nexus**
 
-ORION es una capa de inteligencia que se interpone entre tu cliente de IA (OpenCode, Claude Code, Cursor) y los modelos de lenguaje — sin que el cliente lo sepa.
+ORION es una capa de inteligencia que actúa como proxy local entre tu cliente de IA (OpenCode, Claude Code, Cursor) y los modelos de lenguaje — compatible con la API estándar de Anthropic, sin modificar el cliente ni requerir ningún cambio en tu flujo de trabajo.
 
-Mientras tú trabajas normalmente, ORION decide en silencio qué modelo usa cada request, comprime el contexto antes de enviarlo, mantiene memoria entre sesiones, y te muestra cuánto dinero te ahorró al final del día.
+Lo configuras una vez apuntando el `baseURL` a `localhost:3000`. A partir de ahí, ORION optimiza cada request de forma transparente: decide qué modelo conviene usar, comprime el contexto cuando es necesario, mantiene memoria entre sesiones, y te muestra cuánto ahorraste al final del día.
 
 ```
 Tu cliente (OpenCode / Claude Code / curl)

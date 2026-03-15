@@ -1,0 +1,28 @@
+#!/usr/bin/env sh
+# Valida que el mensaje de commit siga Conventional Commits
+# Tipos permitidos: feat, fix, docs, refactor, test, chore
+# Formato: type(scope): descripción   o   type: descripción
+
+commit_msg=$(cat "$1")
+
+pattern='^(feat|fix|docs|refactor|test|chore)(\([a-z0-9/-]+\))?: .+'
+
+if ! echo "$commit_msg" | grep -qE "$pattern"; then
+  echo ""
+  echo "  ERROR: el mensaje de commit no sigue Conventional Commits."
+  echo ""
+  echo "  Formato esperado:"
+  echo "    type(scope): descripción"
+  echo "    type: descripción"
+  echo ""
+  echo "  Tipos válidos: feat, fix, docs, refactor, test, chore"
+  echo ""
+  echo "  Ejemplos:"
+  echo "    feat(classifier): add data-analysis pattern for Gemini routing"
+  echo "    fix(proxy): handle timeout on Ollama fallback"
+  echo "    docs: update ADR index"
+  echo ""
+  echo "  Tu mensaje: \"$commit_msg\""
+  echo ""
+  exit 1
+fi

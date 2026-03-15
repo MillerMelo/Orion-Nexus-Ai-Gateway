@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-.PHONY: help init up down build logs clean test docker-perms check-hw optimize-model check-ports
+.PHONY: help init setup up down build logs clean test docker-perms check-hw optimize-model check-ports
 
 help:
 	@printf "Make commands:\n"
@@ -14,6 +14,11 @@ help:
 	@printf "  check-ports    - verify port availability, auto-resolve conflicts in .env\n"
 	@printf "  check-hw       - show hardware analysis and model recommendation (no pull)\n"
 	@printf "  optimize-model - interactive model migration: apply hardware recommendation\n"
+	@printf "  setup          - configure git hooks (conventional commits enforcement)\n"
+
+setup:
+	@git config core.hooksPath .githooks
+	@printf "Git hooks activated. Conventional Commits will be enforced on every commit.\n"
 
 init:
 	@if [ ! -f .env ]; then \
