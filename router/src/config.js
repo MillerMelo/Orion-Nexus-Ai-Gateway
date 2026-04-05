@@ -20,21 +20,26 @@ export const config = {
   simulationCommandFlag: process.env.SIMULATION_COMMAND_FLAG || '/simulate',
   sessionCommandFlag: process.env.SESSION_COMMAND_FLAG || '/session',
   ollamaRequestTimeoutMs: toNumber(process.env.OLLAMA_REQUEST_TIMEOUT_MS, 120000),
+  // OpenRouter — backend unificado para modelos remotos (ADR-002)
+  openrouterApiKey: process.env.OPENROUTER_API_KEY,
+  openrouterBaseUrl: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
+  defaultRemoteModel: process.env.DEFAULT_REMOTE_MODEL || 'anthropic/claude-3.5-sonnet',
+
+  // Semantic classifier (ADR-003)
+  classifierModel: process.env.CLASSIFIER_MODEL || 'qwen2.5:3b',
+  classifierConfidenceThreshold: toNumber(process.env.CLASSIFIER_CONFIDENCE_THRESHOLD, 0.6),
+  decisionStorePath: process.env.DECISION_STORE_PATH || './data/decisions.json',
+  decisionStoreMaxEntries: toNumber(process.env.DECISION_STORE_MAX_ENTRIES, 1000),
+
+  // Legacy direct-provider keys (optional, kept for reference)
   claudeApiKey: process.env.CLAUDE_API_KEY,
-  claudeBaseUrl: process.env.CLAUDE_BASE_URL || 'https://api.anthropic.com',
   openaiApiKey: process.env.OPENAI_API_KEY,
-  openaiBaseUrl: process.env.OPENAI_BASE_URL || 'https://api.openai.com',
   openaiDefaultModel: process.env.OPENAI_DEFAULT_MODEL || 'gpt-4o',
   geminiApiKey: process.env.GEMINI_API_KEY,
-  geminiBaseUrl: process.env.GEMINI_BASE_URL || 'https://generativelanguage.googleapis.com',
-  geminiDefaultModel: process.env.GEMINI_DEFAULT_MODEL || 'gemini-1.5-flash',
   groqApiKey: process.env.GROQ_API_KEY,
-  groqBaseUrl: process.env.GROQ_BASE_URL || 'https://api.groq.com',
-  groqDefaultModel: process.env.GROQ_DEFAULT_MODEL || 'llama3-8b-8192',
   quotaTrackerPath: process.env.QUOTA_TRACKER_PATH || './data/quota.json',
   groqDailyTokenLimit: toNumber(process.env.GROQ_DAILY_TOKEN_LIMIT, 500000),
   geminiDailyTokenLimit: toNumber(process.env.GEMINI_DAILY_TOKEN_LIMIT, 1500000),
-  defaultRemoteModel: process.env.DEFAULT_REMOTE_MODEL || 'claude-3.5-sonnet',
   cacheTtlSeconds: toNumber(process.env.CACHE_TTL_SECONDS, 120),
   localModelThreshold: toNumber(process.env.LOCAL_MODEL_THRESHOLD, 800),
   contextHistoryLimit: toNumber(process.env.CONTEXT_HISTORY_LIMIT, 6),

@@ -10,6 +10,8 @@ import { routingMiddleware } from './routing.js';
 import { contextMiddleware, contextRouteHandler, contextListHandler, contextDeleteHandler, contextSearchHandler } from './context.js';
 import { summaryMiddleware } from './summary.js';
 import { proxyMiddleware } from './proxy.js';
+import { feedbackMiddleware } from './classifier/feedback.js';
+import { getDecisions } from './classifier/store.js';
 import { getAllCosts, getSessionCosts, clearSessionCosts, recordLocalCost } from './costs.js';
 import { loadQuota, getQuotaSnapshot } from './quota-tracker.js';
 
@@ -76,6 +78,7 @@ function recordLocalCostIfNeeded(req, res, next) {
 function finalizeRouterResponse(req, res) {
   const messageCount = Array.isArray(req.body.messages) ? req.body.messages.length : 0;
   const compressed = res.locals.compressorMetadata?.reason === 'compressed';
+  const routeResult = res.locals.routeResult;
   res.json({
     handledBy: 'router',
     routerVersion: config.routerVersion,
@@ -84,7 +87,8 @@ function finalizeRouterResponse(req, res) {
     ...(compressed && { compressedPrompt: res.locals.compressedPrompt }),
     compressorMetadata: res.locals.compressorMetadata,
     routeDecision: res.locals.routeDecision,
-    routeResult: res.locals.routeResult,
+    routeResult,
+    classifierSource: routeResult?.source ?? null,
     routeCacheHit: Boolean(res.locals.routeCacheHit),
     semanticSummary: res.locals.semanticSummary,
     summaryMetadata: res.locals.summaryMetadata,
@@ -97,6 +101,7 @@ function finalizeRouterResponse(req, res) {
 
 app.post(
   ['/v1/messages', '/v1/chat/completions'],
+  feedbackMiddleware,
   autoSessionMiddleware,
   sessionCommandMiddleware,
   costsCommandMiddleware,
@@ -138,6 +143,11 @@ app.delete('/router/costs', (_req, res) => {
 });
 
 app.get('/router/quota', (_req, res) => res.json(getQuotaSnapshot()));
+
+app.get('/router/classifier/decisions', async (_req, res) => {
+  const decisions = await getDecisions();
+  res.json({ count: decisions.length, decisions });
+});
 
 loadQuota().then(() => {
   app.listen(config.routerPort, () => {

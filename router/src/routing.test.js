@@ -15,8 +15,7 @@ test('routingMiddleware decides local target and caches response', async () => {
   });
 
   assert.ok(called);
-  assert.equal(res.locals.routeDecision.target, 'local');
-  assert.equal(res.locals.routeResult.provider, 'local');
+  assert.equal(res.locals.routeResult.target, 'local');
   assert.equal(res.locals.routeCacheHit, false);
   const cached = getCacheEntry(cacheKeyForRequest(prompt));
   assert.deepEqual(cached?.model, res.locals.routeResult.model);

@@ -1,50 +1,9 @@
-import { callClaude } from './providers/claude.js';
-import { callOpenAI } from './providers/openai.js';
+import { callOpenRouter } from './providers/openrouter.js';
 import { callOllama } from './providers/ollama.js';
-import { callGemini } from './providers/gemini.js';
-import { callGroq } from './providers/groq.js';
 import { pipeResponseAndCapture } from './providers/stream.js';
 import { recordCost, recordLocalCost } from './costs.js';
-import { recordUsage } from './quota-tracker.js';
 import { withRetry } from './retry.js';
 import { config } from './config.js';
-
-const PROVIDER_DEFAULT_MODEL = {
-  claude: config.defaultRemoteModel,
-  openai: config.openaiDefaultModel,
-  ollama: config.ollamaModel,
-  gemini: config.geminiDefaultModel,
-  groq:   config.groqDefaultModel,
-};
-
-const PRIMARY = {
-  claude: callClaude,
-  openai: callOpenAI,
-  gemini: callGemini,
-  groq:   callGroq,
-};
-
-// Ordered fallback list per provider. First call that succeeds wins.
-const FALLBACK_CHAIN = {
-  claude:  [callGroq, callOpenAI],
-  openai:  [],
-  gemini:  [callGroq, callOpenAI],
-  groq:    [callGemini, callOpenAI],
-  default: [callGroq, callGemini, callOpenAI],
-};
-
-const PROVIDER_NAME_MAP = new Map([
-  [callClaude, 'claude'],
-  [callOpenAI, 'openai'],
-  [callGemini, 'gemini'],
-  [callGroq,   'groq'],
-]);
-
-const QUOTA_TRACKED = new Set(['gemini', 'groq']);
-
-function getProviderName(fn) {
-  return PROVIDER_NAME_MAP.get(fn) ?? 'unknown';
-}
 
 async function handleLocal(req, res, sessionId) {
   const result = await callOllama(req, res.locals);
@@ -58,6 +17,7 @@ async function handleLocal(req, res, sessionId) {
   const inputTokens  = usage.inputTokens  || res.locals.rawInputWordCount || 0;
   const outputTokens = usage.outputTokens || 0;
 
+  res.locals.lastOutputTokens = outputTokens;
   recordLocalCost({ sessionId, inputTokens, outputTokens });
 
   console.info(
@@ -68,58 +28,40 @@ async function handleLocal(req, res, sessionId) {
 
 async function handleRemote(req, res, sessionId) {
   const { routeResult, metrics } = res.locals;
-  const providerName = routeResult.provider ?? 'default';
-  const primaryCall  = PRIMARY[providerName] ?? callClaude;
-  const fallbackList = FALLBACK_CHAIN[providerName] ?? FALLBACK_CHAIN.default;
+  const modelId = routeResult.model ?? config.defaultRemoteModel;
 
-  let result      = await withRetry(() => primaryCall(req, res.locals), providerName);
-  let usedProvider = providerName;
+  const result = await withRetry(() => callOpenRouter(req, res.locals, modelId), 'openrouter');
 
   if (!result.ok) {
-    const primaryError = result.error;
-    console.warn(`[proxy] ${providerName} failed (${result.status}): ${primaryError}`);
-
-    for (const fallbackCall of fallbackList) {
-      const fallbackName = getProviderName(fallbackCall);
-      console.warn(`[proxy] falling back to ${fallbackName}`);
-      result = await withRetry(() => fallbackCall(req, res.locals), fallbackName);
-      if (result.ok) {
-        usedProvider = fallbackName;
-        break;
-      }
-      console.warn(`[proxy] ${fallbackName} also failed (${result.status}): ${result.error}`);
-    }
-
-    if (!result.ok) {
-      return res.status(result.status ?? 502).json({
-        error: result.error,
-        primaryError,
-        provider: providerName,
-        fallback: fallbackList.length > 0,
-      });
-    }
+    return res.status(result.status ?? 502).json({
+      error: result.error,
+      provider: 'openrouter',
+      model: modelId,
+    });
   }
 
-  const streaming     = req.body.stream !== false;
-  const intendedModel = routeResult.model ?? config.defaultRemoteModel;
-  const actualModel   = PROVIDER_DEFAULT_MODEL[usedProvider] ?? intendedModel;
+  const streaming    = req.body.stream !== false;
+  const usage        = await pipeResponseAndCapture(result.response, res, streaming);
 
-  const usage = await pipeResponseAndCapture(result.response, res, streaming);
-
-  if (QUOTA_TRACKED.has(usedProvider)) {
-    recordUsage(usedProvider, usage.inputTokens || 0, usage.outputTokens || 0);
-  }
-
-  const sentTokens       = usage.inputTokens || metrics?.tokens?.compressed || 0;
+  const sentTokens       = usage.inputTokens  || metrics?.tokens?.compressed || 0;
   const rawWordsOriginal = res.locals.rawInputWordCount || 1;
   const rawWordsSent     = metrics?.tokens?.compressed  || rawWordsOriginal;
   const originalTokens   = Math.round(sentTokens * (rawWordsOriginal / rawWordsSent));
 
-  recordCost({ sessionId, model: actualModel, intendedModel, originalTokens, sentTokens, outputTokens: usage.outputTokens });
+  res.locals.lastOutputTokens = usage.outputTokens || 0;
+
+  recordCost({
+    sessionId,
+    model: modelId,
+    intendedModel: modelId,
+    originalTokens,
+    sentTokens,
+    outputTokens: usage.outputTokens,
+  });
 
   console.info(
-    `[cost] session=${sessionId ?? '_global'} provider=${usedProvider} ` +
-    `model=${actualModel}${actualModel !== intendedModel ? ` (fallback from ${intendedModel})` : ''} ` +
+    `[cost] session=${sessionId ?? '_global'} provider=openrouter ` +
+    `model=${modelId} source=${routeResult.source ?? '?'} ` +
     `in=${sentTokens}/${originalTokens} out=${usage.outputTokens}`
   );
 }
