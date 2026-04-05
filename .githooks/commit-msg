@@ -1,28 +1,40 @@
-#!/usr/bin/env sh
-# Valida que el mensaje de commit siga Conventional Commits
-# Tipos permitidos: feat, fix, docs, refactor, test, chore
-# Formato: type(scope): descripción   o   type: descripción
+#!/usr/bin/env bash
+# Conventional Commits enforcement
+# Format: type(scope): description
+# Types: feat, fix, docs, refactor, test, chore, ci, perf, style, revert
 
-commit_msg=$(cat "$1")
+MSG_FILE="$1"
+MSG=$(cat "$MSG_FILE")
 
-pattern='^(feat|fix|docs|refactor|test|chore)(\([a-z0-9/-]+\))?: .+'
+# Ignore merge commits and fixup/squash commits
+if echo "$MSG" | grep -qE "^(Merge |fixup! |squash! )"; then
+  exit 0
+fi
 
-if ! echo "$commit_msg" | grep -qE "$pattern"; then
+PATTERN="^(feat|fix|docs|refactor|test|chore|ci|perf|style|revert)(\([a-z0-9_/-]+\))?: .{1,100}$"
+
+# Check only the first line (subject)
+SUBJECT=$(echo "$MSG" | head -1)
+
+if ! echo "$SUBJECT" | grep -qE "$PATTERN"; then
   echo ""
-  echo "  ERROR: el mensaje de commit no sigue Conventional Commits."
+  echo "  ✗ Commit rechazado: mensaje no sigue Conventional Commits"
   echo ""
-  echo "  Formato esperado:"
+  echo "  Formato requerido:"
   echo "    type(scope): descripción"
-  echo "    type: descripción"
   echo ""
-  echo "  Tipos válidos: feat, fix, docs, refactor, test, chore"
+  echo "  Tipos válidos:"
+  echo "    feat fix docs refactor test chore ci perf style revert"
   echo ""
-  echo "  Ejemplos:"
-  echo "    feat(classifier): add data-analysis pattern for Gemini routing"
-  echo "    fix(proxy): handle timeout on Ollama fallback"
-  echo "    docs: update ADR index"
+  echo "  Ejemplos válidos:"
+  echo "    feat(classifier): add semantic intent detection"
+  echo "    fix(proxy): handle timeout on openrouter fallback"
+  echo "    chore(deps): update express to 4.21"
   echo ""
-  echo "  Tu mensaje: \"$commit_msg\""
+  echo "  Tu mensaje:"
+  echo "    $SUBJECT"
   echo ""
   exit 1
 fi
+
+exit 0

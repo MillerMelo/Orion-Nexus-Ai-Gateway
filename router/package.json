@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "start": "node src/server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "prepare": "git -C .. config core.hooksPath .githooks"
   },
   "dependencies": {
     "dotenv": "^16.4.7",
