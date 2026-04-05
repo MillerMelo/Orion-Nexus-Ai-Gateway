@@ -2,32 +2,35 @@
 
 > **Orchestration · Routing · Intelligence · Optimization · Nexus**
 
-ORION es una capa de inteligencia que actúa como proxy local entre tu cliente de IA (OpenCode, Claude Code, Cursor) y los modelos de lenguaje — compatible con la API estándar de Anthropic, sin modificar el cliente ni requerir ningún cambio en tu flujo de trabajo.
+ORION es una capa de inteligencia que actúa como proxy local entre tu cliente de IA (OpenCode, Claude Code, Cursor) y los modelos de lenguaje — compatible con la API estándar de OpenAI, sin modificar el cliente ni requerir ningún cambio en tu flujo de trabajo.
 
-Lo configuras una vez apuntando el `baseURL` a `localhost:3000`. A partir de ahí, ORION optimiza cada request de forma transparente: decide qué modelo conviene usar, comprime el contexto cuando es necesario, mantiene memoria entre sesiones, y te muestra cuánto ahorraste al final del día.
+Lo configuras una vez apuntando el `baseURL` a `localhost:3000`. A partir de ahí, ORION optimiza cada request de forma transparente: un clasificador semántico local decide qué modelo conviene usar, comprime el contexto cuando es necesario, mantiene memoria entre sesiones, y te muestra cuánto ahorraste al final del día.
 
 ```
 Tu cliente (OpenCode / Claude Code / curl)
                     │
-                    │  API Anthropic estándar — sin cambios en el cliente
+                    │  API OpenAI-compatible — sin cambios en el cliente
                     ▼
   ┌─────────────────────────────────────────────────────────────┐
   │                        ORION :3000                          │
   │                                                             │
   │   ① detecta sesión  →  ② comprime contexto                 │
   │   ③ resume el turno  →  ④ inyecta memoria                  │
-  │   ⑤ clasifica el prompt  →  ⑥ elige el modelo              │
-  │   ⑦ hace el proxy  →  ⑧ registra tokens y ahorro           │
+  │   ⑤ clasifica intent (Ollama local)                         │
+  │   ⑥ elige el modelo óptimo  →  ⑦ proxy  →  ⑧ registra     │
   │                                                             │
-  └──────────────────┬──────────────────────┬───────────────────┘
-                     │                      │
-              prompt simple           prompt técnico
-              < 800 tokens            código / archivos / tools
-                     │                      │
-                     ▼                      ▼
-            Ollama  (local)         Claude  ──fallback──▶  OpenAI
-            Mistral / Qwen          gratis con            si Claude
-            $0.00 · tu PC          tu API key             falla
+  └──────────────┬─────────────────────────┬────────────────────┘
+                 │                         │
+          intent: local              intent: remote
+          tokens < 800               código / legal / análisis / ...
+                 │                         │
+                 ▼                         ▼
+        Ollama  (local)             OpenRouter  (gateway único)
+        $0.00 · tu PC               │
+                                    ├── anthropic/claude-3.5-sonnet
+                                    ├── google/gemini-1.5-pro
+                                    ├── meta-llama/llama-3-70b
+                                    └── 200+ modelos más
 ```
 
 ---
@@ -48,19 +51,33 @@ ORION resuelve los tres problemas de forma transparente, sin cambiar cómo usas 
 
 ## Qué hace exactamente
 
-### Enrutamiento inteligente
+### Enrutamiento inteligente con clasificador semántico
 
-ORION analiza cada request y decide en milisegundos a dónde va:
+ORION no busca palabras clave — **entiende el intent del mensaje**. Un modelo Ollama local (qwen2.5:3b, ~400ms) clasifica cada request y elige el modelo remoto óptimo vía OpenRouter:
 
-| Señal en el prompt | Destino |
-|-------------------|---------|
-| Bloque de código (` ``` `) | Claude remoto |
-| Ruta de archivo (`/src/index.js`) | Claude remoto |
-| Tool result / tool use | Claude remoto |
-| Prompt > 800 tokens | Claude remoto |
-| Pregunta simple sin código | Ollama local — **$0.00** |
+| Intent detectado | Modelo elegido | Por qué |
+|-----------------|----------------|---------|
+| `code`, `code_review`, `debugging` | `anthropic/claude-3.5-sonnet` | Mejor razonamiento multi-archivo |
+| `architecture`, `creative` | `anthropic/claude-3.5-sonnet` | Razonamiento estructural |
+| `legal`, `document`, `analysis` | `google/gemini-1.5-pro` | Contexto largo, documentos |
+| `translation` | `google/gemini-1.5-flash` | Multilingüe, rápido |
+| `summarization` | `meta-llama/llama-3-70b-instruct` | Síntesis eficiente |
+| `question`, `conversation` | `meta-llama/llama-3-8b-instruct` | Máxima velocidad, costo mínimo |
+| Sin señal, < 800 tokens | Ollama local | **$0.00**, tu propia máquina |
 
-Si Claude falla por cualquier motivo → OpenAI como fallback automático, sin que el cliente reciba un error.
+Para casos estructuralmente obvios (bloques de código, tool calls, rutas de archivo), reglas regex responden en < 1ms sin llamar a Ollama.
+
+Cada decisión queda registrada con señales de calidad — la base del clasificador auto-evolutivo que aprenderá de los resultados con el tiempo.
+
+### Una sola API key para 200+ modelos
+
+Antes de Fase 0.6, ORION requería gestionar claves de Claude, OpenAI, Gemini y Groq por separado. Ahora todo el tráfico remoto pasa por **OpenRouter** como gateway unificado:
+
+- **Una sola key** — `OPENROUTER_API_KEY` es la única credencial remota necesaria
+- **200+ modelos disponibles** — agregar un modelo nuevo es cambiar un string en el clasificador, no escribir un nuevo cliente
+- **Fallback automático** — si un modelo está caído, OpenRouter redirige sin que el router deba manejarlo
+- **Sin quota tracking manual** — los límites de rate y cuota los gestiona OpenRouter
+- **Precios unificados** — una sola factura en lugar de N cuentas de proveedor
 
 ### Compresión de contexto
 
@@ -103,22 +120,23 @@ Costo real vs sin router
 
 ## Inicio rápido
 
-**Requisitos:** Docker Engine ≥ 24, Docker Compose v2, al menos una API key (Claude u OpenAI).
+**Requisitos:** Docker Engine ≥ 24, Docker Compose v2, una API key de [OpenRouter](https://openrouter.ai).
 
 ```bash
 # 1. Configurar variables de entorno
 cp .env.example .env
-# Edita .env con tus API keys
+# Edita .env — solo necesitas una clave:
+#   OPENROUTER_API_KEY=sk-or-v1-...
 
 # 2. Levantar el stack
 #    → detecta puertos libres automáticamente
 #    → analiza tu hardware y recomienda el mejor modelo local
-#    → descarga el modelo si es necesario (~4 GB, solo la primera vez)
+#    → descarga el modelo si es necesario
 make up
 
 # 3. Verificar
 curl http://localhost:3000/health
-# {"status":"ok","version":"0.1.0","env":"development"}
+# {"status":"ok","version":"0.6.0","env":"development"}
 ```
 
 ### Conectar OpenCode
@@ -200,25 +218,30 @@ orion-nexus/
 │
 ├── router/src/
 │   ├── server.js           # pipeline de middlewares Express
-│   ├── classifier.js       # reglas de enrutamiento
-│   ├── proxy.js            # llamada al proveedor + fallback chain
+│   ├── routing.js          # orquesta clasificación y cachea decisión
+│   ├── proxy.js            # proxy hacia OpenRouter u Ollama local
 │   ├── contextStore.js     # sesiones persistentes en disco
 │   ├── costs.js            # tracking de tokens y ahorro
+│   │
+│   ├── classifier/         # clasificador semántico (ADR-003)
+│   │   ├── index.js        # orquestador: rules → semantic → default
+│   │   ├── rules.js        # reglas regex fast-path (< 1ms)
+│   │   ├── semantic.js     # clasificación via Ollama structured output
+│   │   ├── store.js        # ring-buffer de decisiones (decisions.json)
+│   │   └── feedback.js     # captura señales de calidad post-respuesta
 │   │
 │   ├── autoSession.js      # detecta sesión desde el system prompt
 │   ├── compression.js      # comprime prompts largos con Ollama
 │   ├── summary.js          # resume cada turno semánticamente
 │   ├── context.js          # inyecta historial en el system prompt
-│   ├── routing.js          # clasifica y cachea decisión de enrutamiento
 │   │
 │   ├── sessionCommand.js   # maneja comandos /session
 │   ├── costsCommand.js     # maneja comandos /costs
 │   ├── simulation.js       # maneja comando /simulate
 │   │
 │   └── providers/
-│       ├── claude.js       # Anthropic /v1/messages
-│       ├── openai.js       # OpenAI /v1/chat/completions
-│       ├── ollama.js       # Ollama /v1/chat/completions
+│       ├── openrouter.js   # gateway unificado → 200+ modelos (ADR-002)
+│       ├── ollama.js       # inferencia local /v1/chat/completions
 │       └── stream.js       # proxy SSE con captura de usage tokens
 │
 ├── scripts/
@@ -268,14 +291,14 @@ Este repositorio es la **Fase 0**: el router inteligente que demuestra que el co
 La hoja de ruta completa evoluciona en cinco fases hacia una plataforma de orquestación de agentes comparable en alcance a lo que Docker hizo con los contenedores:
 
 ```
-Fase 0  ──▶  Fase 1  ──▶  Fase 2  ──▶  Fase 3  ──▶  Fase 4
-AI Router    Command      oriond         Context       ORION
-  (hoy)      Registry     daemon         Graph       Industrial
-             + plugins    + agentes    + Auto Dev    PLC · SCADA
-             + MCP        Planner       Mode (PR      IoT · OPC-UA
-                          Coder         from issue)
-                          Reviewer
-                          Tester
+Fase 0  ──▶  Fase 0.6  ──▶  Fase 1  ──▶  Fase 2  ──▶  Fase 3  ──▶  Fase 4
+AI Router    OpenRouter      Command      oriond         Context       ORION
+  (✅)        + Semantic      Registry     daemon         Graph       Industrial
+              Classifier      + plugins    + agentes    + Auto Dev    PLC · SCADA
+               (✅)           + MCP        Planner       Mode (PR      IoT · OPC-UA
+                              + Learner    Coder         from issue)
+                                           Reviewer
+                                           Tester
 ```
 
 El paralelo es directo con Docker:
