@@ -20,41 +20,42 @@ make init   # equivale a: cp .env.example .env
 | Variable | Tipo | Default | Descripción |
 |----------|------|---------|-------------|
 | `OLLAMA_URL` | string | — | URL base de Ollama. Dentro de Docker: `http://ollama:11434` |
-| `OLLAMA_API_KEY` | string | — | API key de Ollama (opcional si no tienes auth configurada) |
-| `OLLAMA_MODEL` | string | `mistral` | Modelo local a usar para inferencia, compresión y resúmenes |
-| `OLLAMA_REQUEST_TIMEOUT_MS` | número | `120000` | Timeout de peticiones a Ollama en ms. Mistral en CPU tarda ~12-40s |
+| `OLLAMA_API_KEY` | string | — | API key de Ollama (opcional) |
+| `OLLAMA_MODEL` | string | `mistral` | Modelo local para inferencia directa, compresión y resúmenes |
+| `OLLAMA_REQUEST_TIMEOUT_MS` | número | `120000` | Timeout de peticiones a Ollama en ms |
 
-> **Nota:** El modelo local se usa para tres propósitos: compresión de prompts largos, generación de resúmenes semánticos, y respuestas directas cuando el clasificador elige enrutamiento local.
+> Ollama tiene **tres roles** en el stack: inferencia local (cuando el clasificador decide `target=local`), compresión de prompts largos, y generación de resúmenes semánticos por turno.
 
-## Variables de proveedores remotos
+## Variables de OpenRouter (backend remoto unificado)
 
-### Anthropic (Claude)
-
-| Variable | Tipo | Default | Descripción |
-|----------|------|---------|-------------|
-| `CLAUDE_API_KEY` | string | — | API key de Anthropic. Requerida para enrutar a Claude |
-| `CLAUDE_BASE_URL` | string | `https://api.anthropic.com` | Base URL. Útil para proxies corporativos |
-| `DEFAULT_REMOTE_MODEL` | string | `claude-3.5-sonnet` | Modelo Claude por defecto cuando ninguna regla especifica uno |
-
-### OpenAI
+OpenRouter es el único gateway para todos los modelos remotos ([ADR-002](decisions/ADR-002-openrouter-unified-backend.md)). Una sola key da acceso a Claude, Gemini, Llama, Mistral y 200+ modelos más.
 
 | Variable | Tipo | Default | Descripción |
 |----------|------|---------|-------------|
-| `OPENAI_API_KEY` | string | — | API key de OpenAI. También actúa como fallback si Claude falla |
-| `OPENAI_BASE_URL` | string | `https://api.openai.com` | Base URL de OpenAI |
-| `OPENAI_DEFAULT_MODEL` | string | `gpt-4o` | Modelo OpenAI. Siempre se usa este, ignorando el modelo del request |
+| `OPENROUTER_API_KEY` | string | — | **Requerida** para enrutar a cualquier modelo remoto. Obtener en openrouter.ai |
+| `OPENROUTER_BASE_URL` | string | `https://openrouter.ai/api/v1` | Base URL de OpenRouter |
+| `DEFAULT_REMOTE_MODEL` | string | `anthropic/claude-3.5-sonnet` | Modelo OpenRouter usado cuando ninguna regla especifica uno |
 
-### Google Gemini
+> Los model IDs siguen el formato `proveedor/modelo` de OpenRouter. Ejemplos: `anthropic/claude-3.5-sonnet`, `google/gemini-1.5-pro`, `meta-llama/llama-3-70b-instruct`.
+
+## Variables del clasificador semántico
+
+El clasificador usa un modelo Ollama local para entender el intent del mensaje ([ADR-003](decisions/ADR-003-semantic-evolutionary-classifier.md)).
 
 | Variable | Tipo | Default | Descripción |
 |----------|------|---------|-------------|
-| `GEMINI_API_KEY` | string | — | API key de Google AI Studio. Requerida para enrutar a Gemini |
+| `CLASSIFIER_MODEL` | string | `qwen2.5:3b` | Modelo Ollama para clasificación semántica. Debe ser pequeño y rápido |
+| `CLASSIFIER_CONFIDENCE_THRESHOLD` | número | `0.6` | Confianza mínima del clasificador para aceptar su decisión. Bajo este umbral usa el modelo default |
+| `DECISION_STORE_PATH` | string | `./data/decisions.json` | Ruta del archivo de decisiones persistidas |
+| `DECISION_STORE_MAX_ENTRIES` | número | `1000` | Máximo de decisiones almacenadas (ring buffer) |
+
+> Modelos recomendados para `CLASSIFIER_MODEL` según hardware: `qwen2.5:3b` (≥8 GB RAM), `phi3:mini` (<8 GB RAM).
 
 ## Variables de enrutamiento
 
 | Variable | Tipo | Default | Descripción |
 |----------|------|---------|-------------|
-| `LOCAL_MODEL_THRESHOLD` | número | `150` | Prompts con menos tokens que este valor van a Ollama local |
+| `LOCAL_MODEL_THRESHOLD` | número | `800` | Prompts con menos tokens que este valor van a Ollama local si no hay otra señal |
 | `COMPRESSOR_TOKEN_THRESHOLD` | número | `3000` | Prompts con más tokens que este valor se comprimen antes de enviarse |
 
 ## Variables de resúmenes semánticos
@@ -63,7 +64,7 @@ make init   # equivale a: cp .env.example .env
 |----------|------|---------|-------------|
 | `SUMMARY_TOKEN_THRESHOLD` | número | `100` | Mínimo de tokens para activar la generación de resumen |
 | `SUMMARY_INPUT_MAX_TOKENS` | número | `300` | Ventana máxima del prompt enviado a Ollama para resumir |
-| `SUMMARY_OUTPUT_MAX_TOKENS` | número | `150` | Longitud máxima del resumen generado (`-1` = sin límite) |
+| `SUMMARY_OUTPUT_MAX_TOKENS` | número | `150` | Longitud máxima del resumen generado |
 
 ## Variables de contexto y sesiones
 
@@ -95,21 +96,19 @@ OLLAMA_API_KEY=
 OLLAMA_MODEL=mistral
 OLLAMA_REQUEST_TIMEOUT_MS=120000
 
-# ── Claude (Anthropic) ──────────────────────────────────
-CLAUDE_API_KEY=sk-ant-api03-...
-CLAUDE_BASE_URL=https://api.anthropic.com
-DEFAULT_REMOTE_MODEL=claude-sonnet-4-6
+# ── OpenRouter (backend remoto unificado) ────────────────
+OPENROUTER_API_KEY=sk-or-v1-...
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+DEFAULT_REMOTE_MODEL=anthropic/claude-3.5-sonnet
 
-# ── OpenAI ──────────────────────────────────────────────
-OPENAI_API_KEY=sk-proj-...
-OPENAI_BASE_URL=https://api.openai.com
-OPENAI_DEFAULT_MODEL=gpt-4o
-
-# ── Gemini ──────────────────────────────────────────────
-GEMINI_API_KEY=AIza...
+# ── Clasificador semántico ───────────────────────────────
+CLASSIFIER_MODEL=qwen2.5:3b
+CLASSIFIER_CONFIDENCE_THRESHOLD=0.6
+DECISION_STORE_PATH=./data/decisions.json
+DECISION_STORE_MAX_ENTRIES=1000
 
 # ── Enrutamiento ────────────────────────────────────────
-LOCAL_MODEL_THRESHOLD=150
+LOCAL_MODEL_THRESHOLD=800
 COMPRESSOR_TOKEN_THRESHOLD=3000
 
 # ── Resúmenes ───────────────────────────────────────────
@@ -131,5 +130,4 @@ COSTS_COMMAND_FLAG=/costs
 
 - **Nunca subas `.env` a git.** Está en `.gitignore` por defecto.
 - Las API keys se pasan al router como variables de entorno vía `env_file` en `docker-compose.yml`.
-- Ollama no requiere API key por defecto. Si la configuras, el router enviará `Authorization: Bearer <key>` automáticamente.
-- Si solo tienes una API key (p. ej. solo OpenAI), el router funciona correctamente; simplemente no enrutará a los proveedores sin key configurada.
+- Con OpenRouter solo necesitas gestionar **una sola API key** en lugar de múltiples claves de proveedor.

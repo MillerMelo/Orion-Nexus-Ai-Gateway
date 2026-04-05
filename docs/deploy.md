@@ -3,8 +3,8 @@
 ## Prerequisitos
 
 - Docker Engine ≥ 24 y Docker Compose v2
-- ~5 GB de espacio en disco para el modelo Mistral
-- Al menos una API key configurada (Claude, OpenAI, o Gemini)
+- ~2 GB de espacio mínimo para el modelo clasificador (`qwen2.5:3b`)
+- Una API key de [OpenRouter](https://openrouter.ai) (reemplaza a las claves individuales de Claude/OpenAI/Gemini)
 - Usuario en el grupo `docker` (o acceso a `sudo`)
 
 ### Agregar usuario al grupo docker (una sola vez)
@@ -18,29 +18,39 @@ exec su -l $USER    # refresca la sesión sin cerrar terminal
 
 ## Primer despliegue
 
-### 1. Configurar variables de entorno
+### 1. Obtener API key de OpenRouter
+
+Crear cuenta en [openrouter.ai](https://openrouter.ai) → Settings → API Keys → Create Key.
+
+Una sola key da acceso a Claude, Gemini, Llama y 200+ modelos. No se necesitan claves individuales de proveedor.
+
+### 2. Configurar variables de entorno
 
 ```bash
 make init   # copia .env.example → .env
 ```
 
-Edita `.env` y rellena al menos una API key de proveedor remoto:
+Edita `.env` y configura las variables mínimas:
 
 ```dotenv
-CLAUDE_API_KEY=sk-ant-api03-...    # Anthropic
-OPENAI_API_KEY=sk-proj-...         # OpenAI (también actúa como fallback)
-GEMINI_API_KEY=AIza...             # Google AI Studio
+# Requerida — backend remoto unificado
+OPENROUTER_API_KEY=sk-or-v1-...
+
+# Modelo local para inferencia, compresión y clasificación semántica
+OLLAMA_URL=http://ollama:11434
+OLLAMA_MODEL=mistral
+CLASSIFIER_MODEL=qwen2.5:3b
 ```
 
 Las demás variables tienen valores por defecto funcionales. Ver [configuration.md](configuration.md) para el listado completo.
 
-### 2. Verificar disponibilidad de puertos
+### 3. Verificar disponibilidad de puertos
 
 ```bash
 make check-ports
 ```
 
-ORION verifica si los puertos requeridos (`:3000` para el router, `:11434` para Ollama) están disponibles en el host. Si alguno está ocupado, encuentra el siguiente libre y actualiza `.env` automáticamente:
+ORION verifica si los puertos requeridos (`:3000` para el router, `:11434` para Ollama) están disponibles. Si alguno está ocupado, encuentra el siguiente libre y actualiza `.env`:
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -51,22 +61,17 @@ ORION verifica si los puertos requeridos (`:3000` para el router, `:11434` para 
 [WARN]  Puerto :11434 ocupado por ollama.
 [WARN]  Puerto alternativo encontrado: :11435
 [OK]    Actualizado OLLAMA_PORT=11435 en .env
-
-⚠  El puerto del router cambió de :3000 a :3001
-   Actualiza ~/.config/opencode/opencode.json:
-   Cambia:  "baseURL": "http://localhost:3000"
-   Por:     "baseURL": "http://localhost:3001"
 ```
 
-> **Nota:** `make up` ejecuta este check automáticamente como primer paso. Solo es necesario correrlo de forma independiente si quieres revisar los puertos antes de levantar el stack.
+> `make up` ejecuta este check automáticamente. Solo es necesario correrlo de forma independiente para revisar antes de levantar.
 
-### 3. Verificar hardware y seleccionar modelo local
+### 4. Verificar hardware y seleccionar modelo local
 
 ```bash
 make check-hw
 ```
 
-ORION detecta automáticamente tu hardware y recomienda el mejor modelo local disponible:
+ORION detecta tu hardware y recomienda el mejor modelo local:
 
 ```
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -79,57 +84,34 @@ ORION detecta automáticamente tu hardware y recomienda el mejor modelo local di
 [INFO]  Modelo recomendado:   qwen2.5-coder:7b
 ```
 
-El comando `check-hw` solo muestra la recomendación. Para aplicarla:
-
 ```bash
-make optimize-model   # migración interactiva: descarga el recomendado, elimina el anterior opcional
+make optimize-model   # migración interactiva: descarga el recomendado, elimina el anterior (opcional)
 ```
 
-La tabla de recomendaciones según hardware:
+Tabla de recomendaciones:
 
 | RAM | VRAM | Modelo recomendado | Tamaño |
 |-----|------|--------------------|--------|
 | ≥32 GB | ≥8 GB | `deepseek-coder-v2:16b` | ~10 GB |
-| ≥32 GB | CPU | `deepseek-coder-v2:16b` | ~10 GB |
 | ≥16 GB | ≥6 GB | `qwen2.5-coder:7b` | ~5 GB |
-| ≥16 GB | CPU | `qwen2.5-coder:7b` | ~5 GB |
 | ≥8 GB | ≥4 GB | `mistral` | ~4 GB |
-| ≥8 GB | CPU | `mistral` | ~4 GB |
 | <8 GB | — | `phi3:mini` | ~2 GB |
 
-### 4. Levantar el stack
+> El `CLASSIFIER_MODEL` (`qwen2.5:3b`) es independiente del `OLLAMA_MODEL`. El clasificador usa siempre el modelo pequeño; el modelo de inferencia puede ser más grande.
+
+### 5. Levantar el stack
 
 ```bash
 make up
 ```
 
 Este comando:
-1. Ejecuta `scripts/pull-model.sh` — analiza hardware, recomienda el mejor modelo, descarga si es necesario
-2. Si el modelo recomendado difiere del actual, ofrece migrar (pregunta interactiva con `[s/N]`)
-3. Levanta ambos servicios (`router` y `ollama`) con `docker compose up --build`
+1. Verifica puertos disponibles
+2. Analiza hardware y ofrece migrar el modelo si hay uno mejor
+3. Levanta `router` y `ollama` con `docker compose up --build`
+4. Descarga automáticamente el `CLASSIFIER_MODEL` si no está disponible
 
-La primera ejecución puede tardar varios minutos mientras descarga el modelo:
-
-```
-[08:30:00] Iniciando servicio Ollama...
-[INFO]  Esperando que Ollama esté listo...
-[OK]    Ollama está listo.
-[INFO]  RAM disponible:       24 GB
-[INFO]  Modelo recomendado:   qwen2.5-coder:7b
-
-⚠  Se recomienda cambiar el modelo local:
-   Actual:      mistral
-   Recomendado: qwen2.5-coder:7b
-
-  ¿Descargar el modelo recomendado? [s/N]: s
-[INFO]  Descargando modelo qwen2.5-coder:7b...
-[OK]    Modelo qwen2.5-coder:7b descargado.
-[OK]    Actualizado OLLAMA_MODEL=qwen2.5-coder:7b en .env
-
-  ¿Eliminar el modelo anterior (mistral) para liberar espacio? [s/N]:
-```
-
-### 5. Verificar el despliegue
+### 6. Verificar el despliegue
 
 ```bash
 curl http://localhost:3000/health
@@ -137,7 +119,7 @@ curl http://localhost:3000/health
 
 Respuesta esperada:
 ```json
-{"status": "ok", "version": "0.1.0", "env": "development"}
+{"status": "ok", "version": "0.6.0", "env": "development"}
 ```
 
 ```bash
@@ -151,26 +133,41 @@ router    ai_router-router      Up 2 minutes
 ollama    ollama/ollama:latest  Up 2 minutes
 ```
 
-### 6. Probar una consulta
+### 7. Probar una consulta
 
 ```bash
 # Consulta corta → va a Ollama local
-curl http://localhost:3000/v1/messages \
+curl http://localhost:3000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "x-context-id: test" \
   -d '{
-    "model": "claude-sonnet-4-6",
+    "model": "ignored-by-router",
     "messages": [{"role": "user", "content": "¿Qué es Docker en una frase?"}]
   }'
 
-# Consulta con código → va a Claude/OpenAI
-curl http://localhost:3000/v1/messages \
+# Consulta con código → clasificador detecta 'code' → OpenRouter anthropic/claude-3.5-sonnet
+curl http://localhost:3000/v1/chat/completions \
   -H "Content-Type: application/json" \
   -H "x-context-id: test" \
   -d '{
-    "model": "claude-sonnet-4-6",
+    "model": "ignored-by-router",
     "messages": [{"role": "user", "content": "Revisa este código:\n```js\nconst x = 1\n```"}]
   }'
+```
+
+> **Nota:** El campo `model` del request es ignorado por el router. El clasificador decide el modelo según el contenido del mensaje.
+
+Ver la decisión tomada en la respuesta:
+```json
+{
+  "classifierSource": "semantic",
+  "routeResult": {
+    "target": "remote",
+    "model": "anthropic/claude-3.5-sonnet",
+    "reason": "semantic:code",
+    "confidence": 0.94
+  }
+}
 ```
 
 ---
@@ -192,25 +189,21 @@ make optimize-model # Migrar al modelo recomendado de forma interactiva
 
 ```bash
 make logs
-# o filtrado:
+# Filtrados por componente:
 docker compose logs -f router | grep "\[cost\]"
+docker compose logs -f router | grep "\[classifier\]"
 docker compose logs -f router | grep "\[proxy\]"
-docker compose logs -f router | grep "\[context\]"
 ```
 
 ---
 
 ## Actualizar el router
 
-Cuando hay cambios en el código del router:
-
 ```bash
-make down
-make build
-make up
+make down && make build && make up
 ```
 
-O solo reconstruir el router sin tocar Ollama (Mistral ya está descargado):
+O solo reconstruir el router:
 
 ```bash
 docker compose up --build router
@@ -220,12 +213,12 @@ docker compose up --build router
 
 ## Servicios y puertos
 
-| Servicio | Puerto host | Puerto interno | Descripción |
-|----------|-------------|----------------|-------------|
-| Router | `3000` | `3000` | API principal (Anthropic + OpenAI compatible) |
-| Ollama | `11434` | `11434` | API de Ollama (para pruebas directas desde host) |
+| Servicio | Puerto host | Descripción |
+|----------|-------------|-------------|
+| Router | `3000` | API principal (OpenAI-compatible) |
+| Ollama | `11434` | Inferencia local + clasificador semántico |
 
-Desde otros contenedores en la misma red `router-net`:
+Desde otros contenedores en la red `router-net`:
 - Router: `http://router:3000`
 - Ollama: `http://ollama:11434`
 
@@ -235,10 +228,9 @@ Desde otros contenedores en la misma red `router-net`:
 
 | Volumen | Montaje | Contenido |
 |---------|---------|-----------|
-| `./models` | `/root/.ollama` (ollama) | Pesos del modelo Mistral |
+| `./models` | `/root/.ollama` (ollama) | Pesos de modelos locales |
 | `router-sessions` | `/data/sessions` (router) | Sesiones persistidas en JSON |
-
-El volumen `router-sessions` es un volumen Docker nombrado — persiste entre reinicios del contenedor y se puede inspeccionar con:
+| `./data` | `/data` (router) | Decisiones del clasificador (`decisions.json`), quota tracker |
 
 ```bash
 docker volume inspect ai_router_router-sessions
@@ -246,64 +238,35 @@ docker volume inspect ai_router_router-sessions
 
 ---
 
-## Configuración de Ollama
+## Endpoints de monitoreo
 
-### API Key (opcional)
-
-Ollama no requiere API key por defecto. Si quieres activar autenticación:
-
-```bash
-# Con el stack levantado:
-docker compose exec ollama ollama key create router --output json
-# Copia el valor "key" y agrégalo a .env:
-# OLLAMA_API_KEY=<valor>
-
-# Luego recrea el router:
-docker compose up --build router
-```
-
-Si `OLLAMA_API_KEY` está vacía en `.env`, el router no envía el header `Authorization` a Ollama.
-
-### Cambiar el modelo local
-
-Para usar un modelo diferente a Mistral (p. ej. `llama3.2`, `qwen2.5`):
-
-1. Descarga el modelo:
-   ```bash
-   docker compose exec ollama ollama pull llama3.2
-   ```
-
-2. Actualiza `.env`:
-   ```dotenv
-   OLLAMA_MODEL=llama3.2
-   ```
-
-3. Recrea el router:
-   ```bash
-   docker compose up --build router
-   ```
+| Endpoint | Descripción |
+|---|---|
+| `GET /health` | Estado del router |
+| `GET /router/costs` | Resumen de costos por sesión |
+| `GET /router/quota` | Cuota diaria por proveedor |
+| `GET /router/classifier/decisions` | Historial de decisiones del clasificador con señales de calidad |
 
 ---
 
 ## Checklist de lanzamiento
 
-- [ ] `.env` configurado con al menos una API key de proveedor remoto
-- [ ] `make check-hw` revisado — modelo recomendado anotado
-- [ ] `make up` completado sin errores (incluye selección/descarga del modelo local)
+- [ ] `OPENROUTER_API_KEY` configurada en `.env`
+- [ ] `OLLAMA_URL` apunta al servicio Ollama correcto
+- [ ] `CLASSIFIER_MODEL` (`qwen2.5:3b`) descargado en Ollama
+- [ ] `make check-hw` revisado — modelo de inferencia recomendado anotado
+- [ ] `make up` completado sin errores
 - [ ] `curl http://localhost:3000/health` devuelve `{"status":"ok"}`
 - [ ] `docker compose ps` muestra ambos servicios `Up`
-- [ ] Test de consulta corta (→ Ollama) responde correctamente
-- [ ] Test de consulta con código (→ Claude/OpenAI) responde correctamente
+- [ ] Test de consulta corta (→ Ollama local) responde correctamente
+- [ ] Test de consulta con código (→ OpenRouter) responde correctamente
 - [ ] Para OpenCode: `~/.config/opencode/opencode.json` configurado con `baseURL: http://localhost:3000`
 
 ---
 
 ## Producción
 
-Para despliegue en servidor remoto, considera:
-
 - Usar un reverse proxy (nginx, Caddy) con TLS en frente del puerto 3000
-- Mover el volumen `router-sessions` a almacenamiento persistente externo
-- Configurar `NODE_ENV=production` en `.env`
-- Usar `LOG_LEVEL=warn` para reducir verbosidad
-- Montar las API keys desde un gestor de secretos en lugar de un `.env` plano
+- Configurar `NODE_ENV=production` y `LOG_LEVEL=warn` en `.env`
+- Mover `./data` a almacenamiento persistente externo
+- Gestionar `OPENROUTER_API_KEY` desde un gestor de secretos en lugar de `.env` plano
