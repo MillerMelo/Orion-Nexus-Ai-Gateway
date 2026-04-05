@@ -1,6 +1,6 @@
 # ADR-001: Modelo de enrutamiento y clasificación de prompts
 
-**Estado:** Aceptado
+**Estado:** Supersedido por [ADR-003](ADR-003-semantic-evolutionary-classifier.md)
 **Fecha:** 2026-03-15
 **Autores:** equipo ORION
 

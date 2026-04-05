@@ -8,7 +8,9 @@ Cada ADR documenta una decisión significativa: qué se decidió, por qué, y qu
 
 | ID | Título | Estado |
 |----|--------|--------|
-| [ADR-001](ADR-001-routing-classification-model.md) | Modelo de enrutamiento y clasificación de prompts | Aceptado |
+| [ADR-001](ADR-001-routing-classification-model.md) | Modelo de enrutamiento y clasificación de prompts | Supersedido por ADR-003 |
+| [ADR-002](ADR-002-openrouter-unified-backend.md) | OpenRouter como backend unificado para modelos remotos | Aceptado |
+| [ADR-003](ADR-003-semantic-evolutionary-classifier.md) | Clasificador semántico y auto-evolutivo | Aceptado |
 
 ## Estados posibles
 

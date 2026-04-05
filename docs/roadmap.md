@@ -51,7 +51,7 @@ OpenCode / Claude Code
 Capacidades activas:
 - Compresión de contexto con Ollama/Mistral
 - Sesiones persistentes con resumen semántico por turno
-- Clasificación de prompts (código → remote, simple → local)
+- Clasificación de prompts por reglas regex (código → remote, simple → local)
 - Tracking de costos con comparativa real vs estimado
 - Comandos de chat: `/session`, `/costs`, `/simulate`
 - Integración transparente con OpenCode y Claude Code
@@ -59,85 +59,93 @@ Capacidades activas:
 
 ---
 
-## Fase 0.5 — Multi-provider + Quota Tracker (✅ Implementado)
+## Fase 0.5 — Multi-provider + Quota Tracker (✅ Implementado / en migración)
 
-**Objetivo:** Aprovechar los free tiers de proveedores frontier para reducir costos y habilitar arena mode.
+**Nota:** Esta fase implementó acceso directo a múltiples proveedores (Claude, OpenAI, Gemini, Groq). La arquitectura funcionó y validó el concepto. La Fase 0.6 la reemplaza con OpenRouter como backend unificado — ver [ADR-002](decisions/ADR-002-openrouter-unified-backend.md).
 
-```
-OpenCode / Claude Code
-         │
-         ▼
-    AI Router (Express, puerto 3000)
-         │
-    ┌────┴──────────────────────────────────────┐
-    │  clasificación con matriz de capacidades  │
-    │  + quota tracker proactivo (por día)      │
-    └────┬──────────────────────────────────────┘
-         │
-    ┌────┼────────┬────────┐
-    │    │        │        │
- Ollama Groq  Gemini   Claude / OpenAI
- local  free   free    (pagado, fallback final)
-```
+Lo que se conserva de esta fase:
+- El clasificador por matriz de capacidades (migrado a model IDs de OpenRouter en Fase 0.6)
+- La estructura de fallback (delegada a OpenRouter)
+- El tracking de costos (adaptado para modelo único de facturación)
 
-### Proveedores free-tier integrados
+Lo que queda obsoleto:
+- Clientes individuales por proveedor (`providers/claude.js`, `providers/gemini.js`, `providers/groq.js`)
+- Quota tracker por proveedor (`quota-tracker.js`) — OpenRouter gestiona sus propios límites
+- Fallback chain multi-hop en `proxy.js` — se simplifica a un único cliente OpenRouter
 
-| Proveedor | Modelo default | Límite free | Fortaleza |
-|-----------|---------------|-------------|-----------|
-| Groq | `llama3-8b-8192` | ~500K tokens/día | Velocidad — inferencia más rápida del mercado |
-| Gemini | `gemini-1.5-flash` | ~1.5M tokens/día | Contexto largo (1M tokens), multilingüe |
+### Archivos implementados (referencia histórica)
 
-### Matriz de capacidades (classifier)
-
-| Señal en el prompt | Proveedor asignado | Razón |
-|---|---|---|
-| `urgent`, `emergencia`, `prioridad` | Claude (pagado) | Alta criticidad, siempre disponible |
-| `legal`, `contrato`, `cumplimiento` | Gemini free | Razonamiento sobre documentos |
-| Bloque de código (` ``` `) | Claude (pagado) | Mejor en code reasoning multi-archivo |
-| Ruta de archivo (`/src/...`) | Claude (pagado) | File-system-aware tool use |
-| Tool result / tool call | Claude (pagado) | Formato nativo de herramientas |
-| `translate`, `traduc` | Gemini free | Cobertura multilingüe |
-| `summarize`, `resumen` | Groq Llama3 70B | Rápido en tareas de compresión |
-| Pregunta simple (`?`) | Groq Llama3 8B | Máxima velocidad, costo $0.00 |
-| < 800 tokens sin señal | Ollama local | $0.00, procesado en tu PC |
-| ≥ 800 tokens sin señal | Claude (default) | Fallback remoto estándar |
-
-### Quota tracker proactivo
-
-- Monitorea uso diario por proveedor en `./data/quota.json`
-- No espera el 429 — excluye proveedores que superen el 100% de su límite configurado
-- Rollover automático a medianoche UTC
-- Si un proveedor se agota, el clasificador pasa al siguiente en la cadena
-
-### Fallback chain extendida
-
-```
-Provider primario → falla / quota agotada
-  → Groq (si no es el primario)
-  → Gemini (si no es el primario)
-  → OpenAI (fallback comercial)
-```
-
-### Endpoint de monitoreo
-
-```
-GET /router/quota   → cuota diaria por proveedor (usada / límite / restante)
-```
-
-### Archivos implementados
-
-- `router/src/quota-tracker.js` — tracker con rollover diario y persistencia
-- `router/src/providers/gemini.js` — integración vía OpenAI-compat endpoint
-- `router/src/providers/groq.js` — integración OpenAI-compatible
+- `router/src/quota-tracker.js`
+- `router/src/providers/gemini.js`, `providers/groq.js`
 - `router/src/classifier.js` — matriz de capacidades + quota-awareness
-- `router/src/routing.js` — cache invalida entradas de proveedores con quota agotada
-- `router/src/proxy.js` — fallback chain multi-hop + `recordUsage()` post-respuesta
+- `router/src/proxy.js` — fallback chain multi-hop
 
 ---
 
-## Fase 1 — ORION Router (v0.2)
+## Fase 0.6 — OpenRouter + Clasificador Semántico (v0.6)
 
-**Objetivo:** Convertir el AI Router en el núcleo del sistema ORION con un registry de comandos extensible y exposición MCP.
+**Objetivo:** Migrar el backend remoto a OpenRouter como gateway unificado e introducir clasificación basada en comprensión semántica en lugar de regex.
+
+Ver decisiones de diseño: [ADR-002](decisions/ADR-002-openrouter-unified-backend.md) y [ADR-003](decisions/ADR-003-semantic-evolutionary-classifier.md).
+
+### 0.6.1 Migración a OpenRouter
+
+```
+CLI (OpenCode / Claude Code)
+         │
+         ▼
+    AI Router (localhost:3000)
+         │
+         ├── clasificador semántico → elige model ID
+         │
+         ├── target=local  → Ollama (sin cambio)
+         │
+         └── target=remote → providers/openrouter.js
+                               └→ openrouter.ai/api/v1/chat/completions
+```
+
+**Épica:** Backend unificado
+- Crear `router/src/providers/openrouter.js` — cliente único OpenAI-compatible
+- Actualizar `config.js` — agregar `OPENROUTER_API_KEY`, `OPENROUTER_BASE_URL`
+- Simplificar `proxy.js` — `handleRemote` pasa de despacho multi-proveedor a llamada única
+- Actualizar model IDs en el clasificador al formato OpenRouter (`anthropic/claude-3.5-sonnet`, etc.)
+- Marcar como opcionales los clientes directos de proveedor
+
+### 0.6.2 Clasificador semántico (Capa A de ADR-003)
+
+Reemplazar las reglas regex por un clasificador LLM local que entiende el intent del mensaje:
+
+```
+Prompt → Ollama (qwen2.5:3b / phi3:mini)
+       → { category, confidence, suggested_model, reason }
+       → routing decision
+```
+
+Las reglas regex se mantienen como fallback rápido para casos triviales (tool_use, empty, urgent).
+
+**Épica:** Semantic Classifier
+- Crear `router/src/classifier/` — estructura modular
+- Crear `classifier/semantic.js` — clasificación via Ollama structured output
+- Crear `classifier/rules.js` — reglas regex legacy como primer filtro
+- Crear `classifier/index.js` — orquestador con flujo: rules → semantic → default
+- Configurar modelo clasificador: `CLASSIFIER_MODEL` (default: `qwen2.5:3b`)
+
+### 0.6.3 Decision Store + Captura de señales (Capa B de ADR-003)
+
+Persistir cada decisión de enrutamiento con señales de calidad para habilitar el aprendizaje futuro:
+
+**Épica:** Decision Store
+- Crear `classifier/store.js` — SQLite con tabla de decisiones y señales
+- Crear `classifier/feedback.js` — middleware que detecta señales implícitas post-respuesta
+- Exponer `GET /router/classifier/decisions` para auditoría
+
+### Tabla de fases actualizada al final del roadmap.
+
+---
+
+## Fase 1 — ORION Router (v1.0)
+
+**Objetivo:** Convertir el AI Router en el núcleo del sistema ORION con un registry de comandos extensible, exposición MCP, y el ciclo completo de aprendizaje del clasificador.
 
 ### 1.1 Command Registry
 
@@ -221,29 +229,42 @@ prompt ────────────────────────�
 - `router/src/arena.js` — fan-out paralelo + agregación de respuestas
 - Comando de chat `/arena <prompt>` registrado en el Command Registry
 
-### 1.5 Provider scoring multi-criterio
+### 1.5 Caché semántico del clasificador (Capa C de ADR-003)
 
-Extensión del clasificador con ponderación dinámica de proveedores:
+Evitar re-clasificar prompts semánticamente similares usando embeddings:
 
 ```
-score = capability_weight × 0.5
-      + quota_remaining   × 0.3
-      + latency_history   × 0.2
+Prompt nuevo → embedding (Ollama nomic-embed-text)
+             → buscar similitud coseno > 0.92 en store
+             → hit: reusar decisión previa (< 5ms)
+             → miss: clasificar con Ollama (~400ms)
 ```
 
-- **capability_weight** — matriz estática de fortalezas por tipo de tarea (seed en Fase 0.5)
-- **quota_remaining** — porcentaje de cuota diaria disponible (del quota-tracker)
-- **latency_history** — promedio de latencia de las últimas N llamadas por proveedor
+**Épica:** Semantic Cache
+- Crear `classifier/embeddings.js` — generación de embeddings + búsqueda por similitud coseno
+- Actualizar `classifier/index.js` — integrar caché semántico antes del paso a Ollama
+- Actualizar `classifier/store.js` — columna de vector en SQLite (o archivo paralelo)
 
-El proveedor con mayor score gana. Evoluciona la lógica de Fase 0.5 de reglas fijas a scoring continuo.
+### 1.6 Classifier Learner — análisis y sugerencias (Capa D de ADR-003)
 
-**Archivos clave a crear:**
-- `router/src/scorer.js` — cálculo de score + histórico de latencias
-- `router/src/latency-tracker.js` — registro de latencia por proveedor (en memoria, persiste cada N requests)
+Proceso periódico que analiza el histórico de decisiones y sugiere mejoras:
+
+```
+cron nocturno → leer 500 decisiones recientes
+              → agrupar por similitud semántica
+              → calcular señales de calidad por cluster
+              → generar reporte de insights
+              → exponer en GET /router/classifier/insights
+```
+
+**Épica:** Classifier Learner
+- Crear `classifier/learner.js` — análisis de clusters + scoring de señales
+- Exponer `GET /router/classifier/insights` — sugerencias de ajuste con evidencia
+- Registrar changelog de reglas aplicadas en `classifier/changelog.json`
 
 ---
 
-## Fase 2 — oriond + NEXUS Runtime (v0.3)
+## Fase 2 — oriond + NEXUS Runtime + Auto-evolución (v2.0)
 
 **Objetivo:** Daemon centralizado con motor de ejecución de agentes, replicando la arquitectura cliente-motor de Docker.
 
@@ -347,6 +368,23 @@ orion workflow run implement_feature "Add JWT authentication"
 orion workflow run debug_error --logs ./logs/error.log
 ```
 
+### 2.4 Auto-evolución del clasificador (Capa E de ADR-003)
+
+Con suficiente historial validado por el Learner (Fase 1.6), el clasificador puede actualizarse automáticamente:
+
+```
+Sugerencia con confidence > 0.90 && evidence_count > 50
+      → actualizar regla en classifier/rules.js
+      → registrar en classifier/changelog.json
+      → notificar via log
+```
+
+El umbral `CLASSIFIER_AUTO_EVOLVE_THRESHOLD` debe estar desactivado hasta que el Learner haya sido validado manualmente durante al menos un mes.
+
+**Épica:** Classifier Auto-evolve
+- Activar modo autónomo en `learner.js` con umbral configurable
+- Crear mecanismo de rollback de reglas (`classifier/changelog.json` + comando `orion classifier rollback`)
+
 **Archivos clave a crear:**
 - `oriond/` — daemon Go o Node.js con servidor HTTP/gRPC
 - `router/src/nexus/` — runtime de agentes
@@ -354,7 +392,7 @@ orion workflow run debug_error --logs ./logs/error.log
 
 ---
 
-## Fase 3 — Context Graph + Autonomous Dev Mode (v0.4)
+## Fase 3 — Context Graph + Autonomous Dev Mode (v3.0)
 
 **Objetivo:** ORION mantiene conocimiento persistente del repositorio y puede resolver issues de GitHub automáticamente.
 
@@ -444,7 +482,7 @@ oriond autonomous --watch               # modo continuo: monitorea el repo
 
 ---
 
-## Fase 4 — Agent Registry + ORION-Industrial (v0.5+)
+## Fase 4 — Agent Registry + ORION-Industrial (v4.0)
 
 **Objetivo:** Ecosistema de agentes reutilizables y vertical especializada para automatización industrial.
 
@@ -547,11 +585,12 @@ Developer / OpenCode / Claude Code / CI-CD
 | Fase | Versión | Componentes | Estado |
 |------|---------|-------------|--------|
 | 0 — AI Router base | v0.1 | Pipeline completo, sesiones, costos, OpenCode | ✅ Implementado |
-| 0.5 — Multi-provider + Quota | v0.5 | Groq, Gemini free tiers, quota tracker, matriz de capacidades | ✅ Implementado |
-| 1 — Command Registry + MCP + Arena | v0.2 | Registry extensible, plugins npm, MCP server, arena mode, provider scoring | ⬜ Pendiente |
-| 2 — oriond + NEXUS + Agentes | v0.3 | Daemon, multi-agent pipeline, Orionfile | ⬜ Pendiente |
-| 3 — Context Graph + Auto Dev | v0.4 | Grafo semántico, GitHub issue → PR | ⬜ Pendiente |
-| 4 — Registry + Industrial | v1.0 | Agent Hub, ORION-Industrial (PLC/SCADA/IoT) | ⬜ Pendiente |
+| 0.5 — Multi-provider + Quota | v0.5 | Groq, Gemini free tiers, quota tracker, matriz de capacidades | ✅ Implementado (en migración) |
+| 0.6 — OpenRouter + Semantic Classifier | v0.6 | OpenRouter backend, clasificador Ollama, decision store | ⬜ Pendiente |
+| 1 — Command Registry + MCP + Learner | v1.0 | Registry extensible, plugins npm, MCP server, arena mode, caché semántico, classifier learner | ⬜ Pendiente |
+| 2 — oriond + NEXUS + Agentes + Auto-evolve | v2.0 | Daemon, multi-agent pipeline, Orionfile, auto-evolución del clasificador | ⬜ Pendiente |
+| 3 — Context Graph + Auto Dev | v3.0 | Grafo semántico, GitHub issue → PR | ⬜ Pendiente |
+| 4 — Registry + Industrial | v4.0 | Agent Hub, ORION-Industrial (PLC/SCADA/IoT) | ⬜ Pendiente |
 
 ---
 
@@ -578,12 +617,13 @@ El AI Router actual ya hace Fase 0 completa. Fase 1 agrega el registry sin rompe
 
 ---
 
-## Próximos pasos inmediatos
+## Próximos pasos inmediatos (Fase 0.6)
 
-1. **Refactorizar comandos actuales** como entradas del Command Registry (`/session`, `/costs`, `/simulate`)
-2. **Crear `router/src/commandRegistry.js`** con auto-discovery de comandos
-3. **Primer comando externo** como prueba del plugin system: `orion-plugin-git` para comandos git básicos
-4. **Exponer registry via MCP** para que Claude Code pueda llamar comandos ORION como herramientas
-5. **Planificar oriond** como proceso separado que expone el router + registry via HTTP local
+1. **Crear `router/src/providers/openrouter.js`** — cliente único para todos los modelos remotos
+2. **Actualizar `config.js`** — agregar `OPENROUTER_API_KEY` y `OPENROUTER_BASE_URL`
+3. **Simplificar `proxy.js`** — `handleRemote` pasa a usar solo `callOpenRouter`
+4. **Actualizar model IDs en el clasificador** al formato OpenRouter (`anthropic/...`, `google/...`, etc.)
+5. **Crear `router/src/classifier/`** — estructura modular con `rules.js`, `semantic.js`, `index.js`
+6. **Crear `classifier/store.js`** — persistencia SQLite de decisiones de enrutamiento
 
 Ver [architecture.md](architecture.md) para el estado actual de la implementación.
